@@ -4,6 +4,7 @@
 # are untouched; uninstall truncates the archive back to its recorded original length.
 param(
   [Parameter(Mandatory = $true)][string]$Game,
+  [string]$Source = '',      # folder holding coop.rb / Boot.rvdata / coop.ini to copy into <Game>\Coop
   [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
@@ -39,23 +40,34 @@ function Set-Scripts([string]$value) {
 
 if (-not (Test-Path -LiteralPath $arc)) { throw "Game.rgss2a not found in $Game" }
 
-# Remove a previous install (truncate to the original length) before doing anything else.
-if (Test-Path -LiteralPath $lenFile) {
-  $orig = [int64](Get-Content -LiteralPath $lenFile)
-  $fs = [IO.File]::Open($arc, 'Open', 'ReadWrite')
-  try { if ($fs.Length -gt $orig) { $fs.SetLength($orig) } } finally { $fs.Close() }
-  Remove-Item -LiteralPath $lenFile
-}
-
-if ($Uninstall) {
-  Set-Scripts 'Data\Scripts.rvdata'
-  Write-Host 'Changed Co-op removed: Game.rgss2a and Game.ini are back to normal. You can delete the Coop folder.'
-  exit 0
+if (-not $Uninstall -and $Source -and ((Resolve-Path $Source).Path -ne (Resolve-Path $coopDir -ErrorAction SilentlyContinue).Path)) {
+  New-Item -ItemType Directory -Force -Path $coopDir | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Source 'coop.rb') -Destination $coopDir -Force
+  Copy-Item -LiteralPath (Join-Path $Source 'Boot.rvdata') -Destination $coopDir -Force
+  if (-not (Test-Path -LiteralPath (Join-Path $coopDir 'coop.ini'))) {
+    Copy-Item -LiteralPath (Join-Path $Source 'coop.ini') -Destination $coopDir
+  }
 }
 
 $bytes = [IO.File]::ReadAllBytes($arc)
 $scan = Scan-Archive $bytes
-if ($scan.Names.ContainsKey($entryName)) { throw 'Archive already contains the co-op entry but no archive.len was found; restore Game.rgss2a (Steam: Verify integrity) and retry.' }
+
+# Remove a previous install: truncate only if our entry really sits at the end of the archive.
+# (If Steam replaced Game.rgss2a in the meantime, our entry is simply gone and nothing is truncated.)
+if ($scan.Names.ContainsKey($entryName)) {
+  $orig = [int64]$scan.Names[$entryName]
+  $fs = [IO.File]::Open($arc, 'Open', 'ReadWrite')
+  try { $fs.SetLength($orig) } finally { $fs.Close() }
+  $bytes = [IO.File]::ReadAllBytes($arc)
+  $scan = Scan-Archive $bytes
+}
+if (Test-Path -LiteralPath $lenFile) { Remove-Item -LiteralPath $lenFile }
+
+if ($Uninstall) {
+  Set-Scripts 'Data\Scripts.rvdata'
+  Write-Host 'Changed Co-op removed: Game.rgss2a and Game.ini are back to normal. You can delete the Coop folder.'
+  return
+}
 
 $boot = [IO.File]::ReadAllBytes((Join-Path $coopDir 'Boot.rvdata'))
 [uint64]$key = $scan.Key

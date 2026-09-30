@@ -48,3 +48,14 @@ Nothing of the game is redistributed; the archive is untouched.
   hex literals like 0xDEADCAFE / 0xFFFFFFFF are Int32 → use decimal [uint64].
 - Launching: Game.exe exits unless started by Steam (RestartAppIfNecessary). Use `um win launch --steam 814540`.
 - Next: 2-player test (host + client). Needs a second instance (another PC, or steam_appid.txt for local test).
+- 2026-09-30: **Relay ("bridge") on the dexx server**: `relay/relay.py` (asyncio) in container `changed-coop-relay`,
+  `/opt/changed-coop-relay` (compose), public TCP `coop.dexx.moe:27500` (DNS-only record → 31.76.8.80).
+  Protocol: host control `HOST <room>` → `OK`/`ERR`, `CONN <id>` per joiner; host opens data conn `ACCEPT <room> <id>`;
+  joiner `JOIN <room>` then game frames; relay splices bytes. Unknown room → framed `[:reject, msg]`.
+  Tested locally (`relay/test_relay.py`) and over the internet. Game: Mode=relay (default), Room code in coop.ini,
+  pings every 300 frames.
+- **Distribution on tool.dexx.moe**: `/opt/tool/public/{install-changed-coop.ps1, changed-coop.zip}` + section in
+  index.html (backup `/opt/tool/index.html.bak.<ts>`). One-liner finds Changed via Steam libraryfolders.vdf,
+  downloads zip, runs `coop-install.ps1 -Game .. -Source ..` (keeps existing coop.ini). Update path truncates only
+  when our entry is found in the archive. Verified install / update / uninstall (size back to 80706208) on this PC.
+- Next: real 2-player test. `tools/coopbot.py --room CODE` = headless Python client (joins via relay, follows host).

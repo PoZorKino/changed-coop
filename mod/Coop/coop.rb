@@ -374,6 +374,8 @@ module Coop
     @connecting = nil
     @server = nil
     @listen = nil
+    @relay = nil
+    @data_pending = []
     @sys_se = 0
     @audio_mute = false
   end
@@ -406,22 +408,158 @@ module Coop
     nil
   end
 
-  def self.join(host, port)
-    stop if active?
+  #-- relay ("bridge") settings --------------------------------------------
+  def self.relay_mode?
+    ini("Mode", "relay").strip.downcase != "direct"
+  end
+
+  def self.relay_host
+    ini("Relay", "coop.dexx.moe").strip
+  end
+
+  def self.relay_port
+    ini("RelayPort", "27500").to_i
+  end
+
+  def self.room
+    r = ini("Room", "").strip.upcase.gsub(/[^A-Z0-9_-]/, "")
+    if r.empty?
+      chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+      5.times { r << chars[rand(chars.size), 1] }
+      set_ini("Room", r)
+    end
+    r[0, 16]
+  end
+
+  # Non-blocking connect. Returns [socket, nil] or [nil, error].
+  def self.nb_connect(host, port)
     WS.init
     ip = WS.resolve(host)
-    return "Can't resolve \"#{host}\"" unless ip
+    return [nil, "Can't resolve \"#{host}\""] unless ip
     s = WS::Sock.call(2, 1, 6)
-    return "socket() failed (#{WS.err})" if s == -1
+    return [nil, "socket() failed (#{WS.err})"] if s == -1
     WS.nonblock(s)
     WS.nodelay(s)
     WS::Connect.call(s, WS.sockaddr(ip, port), 16)
+    [s, nil]
+  end
+
+  # :ok, :fail or :wait for a socket from nb_connect
+  def self.nb_state(s)
+    w = [1, s].pack("LL")
+    x = [1, s].pack("LL")
+    n = WS::Select.call(0, nil, w, x, [0, 0].pack("ll"))
+    return :fail if n < 0
+    return :ok if n > 0 && w.unpack("L")[0] > 0
+    return :fail if n > 0 && x.unpack("L")[0] > 0
+    :wait
+  end
+
+  def self.raw_send(s, str)
+    WS::Send.call(s, str, str.size, 0)
+  end
+
+  # Read complete text lines from a raw socket record {"sock","buf"}; nil when closed.
+  def self.raw_lines(r)
+    buf = "\0" * 4096
+    8.times do
+      n = WS::Recv.call(r["sock"], buf, buf.size, 0)
+      if n > 0
+        r["buf"] << buf[0, n]
+      elsif n == 0
+        return nil
+      else
+        return nil unless WS.err == WS::WOULDBLOCK
+        break
+      end
+    end
+    lines = []
+    while (i = r["buf"].index("\n"))
+      lines << r["buf"][0, i].strip
+      r["buf"][0, i + 1] = ""
+    end
+    lines
+  end
+
+  def self.host_start_relay
+    stop if active?
+    s, err = nb_connect(relay_host, relay_port)
+    return err if err
+    reset_session
+    @mode = :host
+    @me = 0
+    @next_pid = 1
+    @names = { 0 => my_name }
+    @relay = { "sock" => s, "state" => :connecting, "t0" => Graphics.frame_count, "buf" => "", "room" => room }
+    @status = "Connecting to relay #{relay_host}..."
+    log("host via relay #{relay_host}:#{relay_port} room #{room}")
+    nil
+  end
+
+  def self.host_relay_pump
+    r = @relay
+    if r["state"] == :connecting
+      st = nb_state(r["sock"])
+      if st == :ok
+        raw_send(r["sock"], "HOST #{r['room']}\n")
+        r["state"] = :registering
+      elsif st == :fail || Graphics.frame_count - r["t0"] > 480
+        stop("Could not reach the relay #{relay_host}")
+        return
+      end
+    else
+      lines = raw_lines(r)
+      if lines.nil?
+        stop("Lost connection to the relay")
+        return
+      end
+      lines.each do |l|
+        if l == "OK"
+          r["state"] = :open
+          @status = "Hosting room #{r['room']} via #{relay_host}"
+          toast("Room #{r['room']} is open - share the code!")
+        elsif l[0, 3] == "ERR"
+          stop("Relay: #{l[4, l.size]}")
+          return
+        elsif l =~ /\ACONN (\d+)\z/
+          s, err = nb_connect(relay_host, relay_port)
+          @data_pending << [s, Graphics.frame_count, $1] if s
+        end
+      end
+    end
+    @data_pending.each do |d|
+      st = nb_state(d[0])
+      if st == :ok
+        c = Conn.new(d[0])
+        c.send_frame("ACCEPT #{r['room']} #{d[2]}\n")
+        @conns << c
+        d[1] = nil
+      elsif st == :fail || Graphics.frame_count - d[1] > 480
+        WS::Close.call(d[0])
+        d[1] = nil
+      end
+    end
+    @data_pending = @data_pending.select { |d| d[1] }
+  end
+
+  def self.join(host, port)
+    start_join(host, port, "#{host}:#{port}", nil)
+  end
+
+  def self.join_relay
+    start_join(relay_host, relay_port, "room #{room}", "JOIN #{room}\n")
+  end
+
+  def self.start_join(host, port, label, prelude)
+    stop if active?
+    s, err = nb_connect(host, port)
+    return err if err
     reset_session
     @mode = :client
     @me = -1
-    @connecting = [s, Graphics.frame_count, "#{host}:#{port}"]
-    @status = "Connecting to #{host}:#{port}..."
-    log("connecting to #{host}:#{port}")
+    @connecting = [s, Graphics.frame_count, label, prelude]
+    @status = "Connecting to #{label}..."
+    log("connecting to #{label} (#{host}:#{port})")
     nil
   end
 
@@ -435,6 +573,8 @@ module Coop
     if host?
       @conns.each { |c| c.send_msg([:bye]); c.flush; c.close }
       WS::Close.call(@listen) if @listen
+      WS::Close.call(@relay["sock"]) if @relay
+      (@data_pending || []).each { |d| WS::Close.call(d[0]) }
     end
     was = @mode
     @mode = :off
@@ -451,8 +591,15 @@ module Coop
   def self.pump
     overlay_update
     return unless active?
+    ping = (Graphics.frame_count % 300 == 0)
     if host?
-      host_accept
+      if @relay
+        host_relay_pump
+        return unless host?
+      else
+        host_accept
+      end
+      @conns.each { |c| c.send_msg([:ping]) if c.alive } if ping
       @conns.each do |c|
         next unless c.alive
         c.poll.each { |m| host_recv(c, m) }
@@ -463,6 +610,7 @@ module Coop
     else
       client_check_connecting if @connecting
       if @server
+        @server.send_msg([:ping]) if ping
         @server.poll.each { |m| client_recv(m) }
         @server.flush
         client_lost unless @server.alive
@@ -957,17 +1105,16 @@ module Coop
   # CLIENT side
   #--------------------------------------------------------------------------
   def self.client_check_connecting
-    s, t0, label = @connecting
-    w = [1, s].pack("LL")
-    x = [1, s].pack("LL")
-    n = WS::Select.call(0, nil, w, x, [0, 0].pack("ll"))
-    if n > 0 && w.unpack("L")[0] > 0
+    s, t0, label, prelude = @connecting
+    st = nb_state(s)
+    if st == :ok
       @connecting = nil
       @server = Conn.new(s)
+      @server.send_frame(prelude) if prelude
       @server.send_msg([:hello, my_name, VERSION])
-      @status = "Connected to #{label}, handshaking..."
+      @status = "Connected to #{label}, waiting for the host..."
       log("connected to #{label}")
-    elsif (n > 0 && x.unpack("L")[0] > 0) || Graphics.frame_count - t0 > 60 * 8
+    elsif st == :fail || Graphics.frame_count - t0 > 60 * 8
       WS::Close.call(s)
       @connecting = nil
       stop("Could not connect to #{label}")
@@ -1405,6 +1552,7 @@ module Coop
     if active?
       b.font.color = Color.new(255, 255, 255)
       label = host? ? "CO-OP HOST" : (@me >= 0 ? "CO-OP P#{@me + 1}" : "CO-OP")
+      label += "  room #{@relay['room']}" if host? && @relay
       b.draw_text(6, 2, 200, 18, label)
       y = 2
       @names.keys.sort.each do |pid|
@@ -2036,12 +2184,12 @@ class Scene_Coop < Scene_Base
   end
 
   def commands
-    host = Coop.ini("Host", "127.0.0.1")
-    port = Coop.ini("Port", "27500")
+    relay = Coop.relay_mode?
     [Coop.host? ? "Hosting... (back to title)" : "Host game",
      "Join game",
-     "Address: #{host}",
-     "Port: #{port}",
+     relay ? "Via: relay server" : "Via: direct IP",
+     relay ? "Room: #{Coop.room}" : "Address: #{Coop.ini('Host', '127.0.0.1')}",
+     relay ? "Relay: #{Coop.relay_host}" : "Port: #{Coop.ini('Port', '27500')}",
      "Name: #{Coop.my_name}",
      Coop.active? ? "Disconnect" : "Back"]
   end
@@ -2066,12 +2214,20 @@ class Scene_Coop < Scene_Base
     if Coop.active?
       lines << "Players:"
       Coop.names.keys.sort.each { |pid| lines << " P#{pid + 1} #{Coop.names[pid]}" }
+    elsif Coop.relay_mode?
+      lines << "Host: Host game, then"
+      lines << " New Game / Continue."
+      lines << "Tell friends your room"
+      lines << " code: #{Coop.room}"
+      lines << "Friends: type the same"
+      lines << " Room, then Join game."
+      lines << "No port forwarding needed."
     else
-      lines << "Host: pick Host game,"
-      lines << " then New Game/Continue."
+      lines << "Host: Host game, then"
+      lines << " New Game / Continue."
       lines << "Friends: set Address to"
       lines << " the host's IP, Join game."
-      lines << "Port #{Coop.ini('Port', '27500')} (TCP) must be"
+      lines << "TCP port #{Coop.ini('Port', '27500')} must be"
       lines << " reachable on the host."
     end
     y = 0
@@ -2118,7 +2274,7 @@ class Scene_Coop < Scene_Base
         $scene = Scene_Title.new
         return
       end
-      err = Coop.host_start(Coop.ini("Port", "27500").to_i)
+      err = Coop.relay_mode? ? Coop.host_start_relay : Coop.host_start(Coop.ini("Port", "27500").to_i)
       if err
         Sound.play_buzzer
         Coop.toast(err)
@@ -2127,7 +2283,8 @@ class Scene_Coop < Scene_Base
         $scene = Scene_Title.new
       end
     when 1
-      err = Coop.join(Coop.ini("Host", "127.0.0.1"), Coop.ini("Port", "27500").to_i)
+      err = Coop.relay_mode? ? Coop.join_relay :
+            Coop.join(Coop.ini("Host", "127.0.0.1"), Coop.ini("Port", "27500").to_i)
       if err
         Sound.play_buzzer
         Coop.toast(err)
@@ -2135,10 +2292,24 @@ class Scene_Coop < Scene_Base
         Sound.play_decision
       end
       rebuild
-    when 2 then begin_edit("Host", Coop.ini("Host", "127.0.0.1"), 64)
-    when 3 then begin_edit("Port", Coop.ini("Port", "27500"), 5)
-    when 4 then begin_edit("Name", Coop.my_name, 16)
-    when 5
+    when 2
+      Sound.play_decision
+      Coop.set_ini("Mode", Coop.relay_mode? ? "direct" : "relay")
+      rebuild
+    when 3
+      if Coop.relay_mode?
+        begin_edit("Room", Coop.room, 16)
+      else
+        begin_edit("Host", Coop.ini("Host", "127.0.0.1"), 64)
+      end
+    when 4
+      if Coop.relay_mode?
+        begin_edit("Relay", Coop.relay_host, 64)
+      else
+        begin_edit("Port", Coop.ini("Port", "27500"), 5)
+      end
+    when 5 then begin_edit("Name", Coop.my_name, 16)
+    when 6
       Sound.play_cancel
       if Coop.active?
         Coop.stop("Disconnected")
@@ -2196,6 +2367,7 @@ class Scene_Coop < Scene_Base
       elsif vk == 0x0D
         text = text.strip
         text = text.gsub(/[^0-9]/, "") if key == "Port"
+        text = text.upcase.gsub(/[^A-Z0-9_-]/, "") if key == "Room"
         Coop.set_ini(key, text) unless text.empty?
         Sound.play_decision
         @editing = nil

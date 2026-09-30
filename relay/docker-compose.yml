@@ -1,0 +1,17 @@
+services:
+  changed-coop-relay:
+    image: python:3.12-alpine
+    container_name: changed-coop-relay
+    restart: unless-stopped
+    working_dir: /app
+    command: ["python", "-u", "relay.py"]
+    environment:
+      - PORT=27500
+    volumes:
+      - ./relay.py:/app/relay.py:ro
+    ports:
+      - "27500:27500/tcp"
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }

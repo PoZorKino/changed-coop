@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoZo Tools</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #e8e8e4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  main {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 5rem 1.5rem 6rem;
+  }
+  h1 {
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+    margin: 0 0 3rem;
+  }
+  h1 span { color: #6a6a63; }
+  section {
+    padding: 1.75rem 0;
+    border-top: 1px solid #232320;
+  }
+  section:last-child { border-bottom: 1px solid #232320; }
+  h2 {
+    font-size: .9rem;
+    font-weight: 500;
+    margin: 0 0 .6rem;
+  }
+  p {
+    color: #9a9a92;
+    margin: 0 0 .8rem;
+  }
+  pre {
+    background: #111110;
+    border: 1px solid #232320;
+    color: #cfe58a;
+    font-size: .85rem;
+    margin: 0 0 .6rem;
+    overflow-x: auto;
+    padding: .7rem .9rem;
+  }
+  a {
+    color: #9a9a92;
+    text-underline-offset: .25em;
+  }
+  a:hover, a:focus-visible { color: #e8e8e4; }
+  .links a:not(:last-child)::after {
+    content: " · ";
+    color: #444;
+  }
+</style>
+</head>
+<body>
+  <main>
+    <h1>pozo <span>/ tools</span></h1>
+
+    <section>
+      <h2>opencode installer</h2>
+      <p>Install OpenCode and its Windows prerequisites:</p>
+      <pre>irm https://tool.dexx.moe/install-opencode.ps1 | iex</pre>
+      <div class="links"><a href="/install-opencode.ps1">source</a></div>
+    </section>
+
+    <section>
+      <h2>gpt limits</h2>
+      <p>Ephemeral ChatGPT Codex usage command. Restart OpenCode, then run <code>/gptlimits</code>.</p>
+      <pre>irm https://tool.dexx.moe/install-gptlimits.ps1 | iex</pre>
+      <div class="links"><a href="/install-gptlimits.ps1">source</a> <a href="/gptlimits-plugin.zip">package</a></div>
+    </section>
+
+    <section>
+      <h2>codex computer-use border patch</h2>
+      <p>Fixes <code>SetIsBorderRequired E_NOINTERFACE</code> on older Windows 10 builds by skipping the border-required check so capture starts anyway.</p>
+      <pre>irm https://tool.dexx.moe/patch-codex-border.ps1 | iex</pre>
+      <div class="links"><a href="/patch-codex-border.ps1">source</a></div>
+    </section>
+    <section>
+      <h2>sovok</h2>
+      <p>AI desktop companion for Windows. Chat with a protogen buddy in a side panel; every few minutes it peeks at your screen and asks what you're up to. Works with Claude or any OpenAI-compatible API (bring your own key). Send it images, PDFs and code files too.</p>
+      <p>Corner mode: it sits on your screen and talks in a speech bubble. Click it or press <code>Ctrl+Shift+Space</code> to text it, drag it to move it, right-click for more.</p>
+      <div class="links"><a href="/sovok-setup-0.3.0.exe">installer</a> <a href="/sovok-0.3.0-portable.exe">portable</a></div>
+      <p>v0.3.0 · ~100 MB · unsigned, so SmartScreen will ask: More info → Run anyway.</p>
+    </section>
+    <section>
+      <h2>changed co-op</h2>
+      <p>Online co-op for <em>Changed</em> (Steam), 2+ players. The host plays the real game; friends join the same world with their own character. Enemies chase the nearest player, caught players become latex ghosts a teammate can revive, and it's game over only when everyone is caught. Connects through a relay, so no port forwarding.</p>
+      <pre>irm https://tool.dexx.moe/install-changed-coop.ps1 | iex</pre>
+      <p>In game: title screen &rarr; <code>CO-OP</code>. Host: <code>Host game</code>, then share your room code. Friends: type the room code &rarr; <code>Join game</code>. Everyone needs the same version.</p>
+      <p>Uninstall: <code>$coopUninstall=1; irm https://tool.dexx.moe/install-changed-coop.ps1 | iex</code></p>
+      <div class="links"><a href="/install-changed-coop.ps1">source</a> <a href="/changed-coop.zip">package</a></div>
+      <p>v0.1.0 &middot; early test build &middot; ships no game files</p>
+    </section>
+  </main>
+</body>
+</html>
