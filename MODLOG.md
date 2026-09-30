@@ -40,3 +40,11 @@ Nothing of the game is redistributed; the archive is untouched.
 
 ## Log
 - 2026-09-30: recon, extraction, design. Writing coop.rb v0.1.0.
+- 2026-09-30: **RGSS2 ignores a loose Scripts= file while Game.rgss2a exists** ("Failed to load script.";
+  proven by renaming the archive → loose file loaded fine). Fix: `mod/coop-install.ps1` APPENDS one entry
+  `Coop\Boot.rvdata` to Game.rgss2a (key state continues from the last header; data untouched), saves the original
+  length to `Coop/archive.len`, sets `Scripts=Coop\Boot.rvdata`. Uninstall truncates. Verified round-trip with
+  extract_rgss2a.py (Boot bytes match, original Scripts intact). Game boots, CO-OP menu shows. PS 5.1 gotcha:
+  hex literals like 0xDEADCAFE / 0xFFFFFFFF are Int32 → use decimal [uint64].
+- Launching: Game.exe exits unless started by Steam (RestartAppIfNecessary). Use `um win launch --steam 814540`.
+- Next: 2-player test (host + client). Needs a second instance (another PC, or steam_appid.txt for local test).
